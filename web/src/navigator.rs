@@ -29,7 +29,7 @@ use wasm_bindgen_futures::{JsFuture, spawn_local};
 use wasm_streams::readable::ReadableStream;
 use web_sys::{
     Blob, BlobPropertyBag, HtmlFormElement, HtmlInputElement, Request as WebRequest,
-    RequestCredentials, RequestInit, Response as WebResponse, window,
+    RequestCredentials, RequestInit, RequestCache, Response as WebResponse, window,
 };
 
 /// The handling mode of links opening a new website.
@@ -341,6 +341,11 @@ impl NavigatorBackend for WebNavigatorBackend {
 
             init.set_method(&request.method().to_string());
             init.set_credentials(credentials);
+
+            // AQW optimization: Zero-Ping Cache (ForceCache) for game assets
+            if url.as_str().contains(".swf") {
+                init.set_cache(RequestCache::ForceCache);
+            }
 
             if let Some((data, mime)) = request.body() {
                 let options = BlobPropertyBag::new();

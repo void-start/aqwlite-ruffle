@@ -843,7 +843,17 @@ impl<'gc> DisplayObjectBase<'gc> {
 
     fn recheck_cache_as_bitmap(&self) {
         let mut write = self.cell.borrow_mut();
-        let should_cache = self.is_bitmap_cached_preference() || !write.filters.is_empty();
+
+        // AQW optimization: Auto-cache player avatars!
+        let mut is_aqw_player = false;
+        if let Some(name) = self.name.get() {
+            let name_str = name.to_string();
+            if name_str.contains("mcChar") || name_str.contains("pMC") {
+                is_aqw_player = true;
+            }
+        }
+
+        let should_cache = self.is_bitmap_cached_preference() || !write.filters.is_empty() || is_aqw_player;
         if should_cache {
             write.cache.get_or_insert_default();
         } else {
@@ -954,7 +964,9 @@ pub fn render_base<'gc>(
         context.transform_stack.push(&transform);
     }
 
-    let blend_mode = this.blend_mode();
+    // AQW optimization: Disable heavy blend modes (like Layer) to save massive GPU fill rate.
+    // Treating all blends as Normal drastically improves FPS in crowded maps like Yulgar.
+    let blend_mode = ExtendedBlendMode::Normal;
     let original_commands = if blend_mode != ExtendedBlendMode::Normal {
         Some(std::mem::take(&mut context.commands))
     } else {
