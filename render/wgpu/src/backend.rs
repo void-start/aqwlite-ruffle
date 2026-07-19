@@ -630,7 +630,8 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
 
         self.active_frame
             .submit_for_target(&self.descriptors, &self.target, frame_output);
-        self.offscreen_texture_pool = TexturePool::new();
+        // AQW optimization: Kill offscreen texture churn.
+        // We no longer recreate the TexturePool every frame, which prevents VRAM fragmentation and OOM.
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1186,7 +1187,7 @@ async fn request_device(
         }
     }
 
-    adapter
+    let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: None,
             required_features: features,
@@ -1195,7 +1196,13 @@ async fn request_device(
             trace: wgpu::Trace::Off,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
         })
-        .await
+        .await?;
+
+    device.on_uncaptured_error(Box::new(|e| {
+        tracing::error!("AQW WGPU Error (Suppressed Panic): {:?}", e);
+    }));
+
+    Ok((device, queue))
 }
 
 /// Determines how we choose our frame buffer
