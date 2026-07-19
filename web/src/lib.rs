@@ -1120,10 +1120,27 @@ impl RuffleHandle {
     }
 
     fn tick(self, timestamp: f64) {
+        let mut skip_tick = false;
         let mut dt = 0.0;
         let mut new_dimensions = None;
         let mut gamepad_button_events = Vec::new();
         let _ = self.with_instance_mut(|instance| {
+            // AQW optimization: Throttle frame rate to 5 FPS when unfocused
+            if !instance.has_focus && !instance.background_tick_mode {
+                let elapsed = timestamp - instance.timestamp.unwrap_or(0.0);
+                if elapsed < 200.0 {
+                    skip_tick = true;
+                    if let Some(handler) = &instance.animation_handler {
+                        let id = instance
+                            .window
+                            .request_animation_frame(handler.as_ref().unchecked_ref())
+                            .unwrap_or_default();
+                        instance.animation_handler_id = NonZeroI32::new(id);
+                    }
+                    return;
+                }
+            }
+
             // Check for canvas resize.
             let canvas_width = instance.canvas.client_width();
             let canvas_height = instance.canvas.client_height();
@@ -1223,6 +1240,10 @@ impl RuffleHandle {
             // Store the timestamp of the last tick.
             instance.timestamp = Some(timestamp);
         });
+
+        if skip_tick {
+            return;
+        }
 
         // Tick the Ruffle core.
         let _ = self.with_core_mut(|core| {

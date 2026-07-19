@@ -1554,6 +1554,7 @@ impl<'gc> MovieClip<'gc> {
                     // Run first frame.
                     child.post_instantiation(context, None, Instantiator::Movie, false);
                     child.enter_frame(context);
+                    child.base().set_skip_next_enter_frame(true);
                     // In AVM1, children are added in `run_frame` so this is necessary.
                     // In AVM2 we add them in `construct_frame` so calling this causes
                     // duplicate frames

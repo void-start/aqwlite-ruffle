@@ -943,6 +943,12 @@ pub fn render_base<'gc>(
         return;
     }
 
+    if options.skip_masks && !this.visible() {
+        // AQW optimization: Skip rendering invisible objects entirely.
+        // Masks don't have skip_masks = true, so invisible masks will still function correctly.
+        return;
+    }
+
     if options.apply_transform {
         let transform = this.base().transform(options.apply_matrix);
         context.transform_stack.push(&transform);
