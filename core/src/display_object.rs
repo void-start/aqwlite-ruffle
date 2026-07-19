@@ -971,7 +971,7 @@ pub fn render_base<'gc>(
         if let Some(cache) = &mut *this.base().bitmap_cache_mut() {
             let width = bounds.width().to_pixels().ceil().max(0.0);
             let height = bounds.height().to_pixels().ceil().max(0.0);
-            if width <= u16::MAX as f64 && height <= u16::MAX as f64 {
+            if width <= 2048.0 && height <= 2048.0 {
                 let width = width as u32;
                 let height = height as u32;
                 let mut filter_rect = Rectangle {
@@ -1025,7 +1025,7 @@ pub fn render_base<'gc>(
             } else {
                 if !cache.warned_for_oversize {
                     tracing::warn!(
-                        "Skipping cacheAsBitmap for incredibly large object {:?} ({width} x {height})",
+                        "AQW VRAM Protection: Skipping cacheAsBitmap for incredibly large object {:?} ({width} x {height}). Max size is 2048x2048.",
                         name
                     );
                     cache.warned_for_oversize = true;

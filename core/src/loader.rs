@@ -216,6 +216,8 @@ impl From<crate::avm1::Error<'_>> for Error {
     }
 }
 
+const LOADER_GC_GRACE_FRAMES: u32 = 120;
+
 /// Holds all in-progress loads for the player.
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -320,6 +322,7 @@ impl<'gc> LoadManager<'gc> {
             vm_data,
             loader_status: LoaderStatus::Pending,
             movie: None,
+            detached_frames: 0,
         };
         let handle = self.add_loader(loader);
         let loader = self.get_loader_mut(handle).unwrap();
@@ -408,6 +411,7 @@ impl<'gc> LoadManager<'gc> {
             vm_data,
             loader_status: LoaderStatus::Pending,
             movie: None,
+            detached_frames: 0,
         };
         let handle = context.load_manager.add_loader(loader);
         MovieLoader::movie_loader_bytes(handle, context, loader_url, bytes)
@@ -469,8 +473,6 @@ impl<'gc> LoadManager<'gc> {
     }
 
     pub fn run_exit_frame(context: &mut UpdateContext<'gc>) {
-        // The root movie might not have come from a loader, so check it separately.
-        // `fire_init_and_complete_events` is idempotent, so we unconditionally call it here
         if let Some(movie) = context
             .stage
             .child_by_index(0)
@@ -480,11 +482,35 @@ impl<'gc> LoadManager<'gc> {
         }
         let handles: Vec<_> = context.load_manager.0.iter().map(|(h, _)| h).collect();
         for handle in handles {
-            if let Some(MovieLoader { target_clip, .. }) = context.load_manager.get_loader(handle)
-                && let Some(movie) = target_clip.as_movie_clip()
-                && movie.try_fire_loaderinfo_events(context)
-            {
-                context.load_manager.remove_loader(handle)
+            let mut should_remove = false;
+            let mut target_clip = None;
+
+            if let Some(loader) = context.load_manager.get_loader(handle) {
+                target_clip = Some(loader.target_clip);
+            }
+
+            if let Some(clip) = target_clip {
+                if let Some(movie) = clip.as_movie_clip() {
+                    if movie.try_fire_loaderinfo_events(context) {
+                        should_remove = true;
+                    }
+                }
+            }
+
+            if should_remove {
+                context.load_manager.remove_loader(handle);
+            } else {
+                let is_on_stage = target_clip.map(|c| c.is_on_stage(context)).unwrap_or(false);
+                if let Some(loader) = context.load_manager.get_loader_mut(handle) {
+                    if is_on_stage {
+                        loader.detached_frames = 0;
+                    } else {
+                        loader.detached_frames = loader.detached_frames.saturating_add(1);
+                        if loader.detached_frames >= LOADER_GC_GRACE_FRAMES {
+                            context.load_manager.remove_loader(handle);
+                        }
+                    }
+                }
             }
         }
     }
@@ -593,6 +619,9 @@ pub struct MovieLoader<'gc> {
     /// completed and we expect the Player to periodically tick preload
     /// until loading completes.
     movie: Option<Arc<SwfMovie>>,
+
+    #[collect(require_static)]
+    detached_frames: u32,
 }
 
 impl<'gc> MovieLoader<'gc> {
