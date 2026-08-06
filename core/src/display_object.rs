@@ -318,10 +318,6 @@ pub struct DisplayObjectBase<'gc> {
 
     /// Rectangle used for 9-slice scaling (`DisplayObject.scale9grid`).
     scaling_grid: Cell<Rectangle<Twips>>,
-
-    /// Consecutive frames rendered without `invalidate_cached_bitmap` being
-    /// called on this object. Drives the heuristic bitmap cache below.
-    stable_frames: Cell<u16>,
 }
 
 #[derive(Clone)]
@@ -366,7 +362,6 @@ impl Default for DisplayObjectBase<'_> {
             scroll_rect: Cell::new(None),
             next_scroll_rect: Default::default(),
             scaling_grid: Default::default(),
-            stable_frames: Cell::new(0),
         }
     }
 }
@@ -846,24 +841,9 @@ impl<'gc> DisplayObjectBase<'gc> {
         self.set_flag(DisplayObjectFlags::CACHE_INVALIDATED, false);
     }
 
-    /// Updates the stable-frame counter used by the auto bitmap cache
-    /// heuristic. Returns the new counter value; 0 means this object's
-    /// cache-relevant state was touched this frame.
-    fn tick_stable_frames(&self) -> u16 {
-        if self.contains_flag(DisplayObjectFlags::CACHE_INVALIDATED) {
-            self.stable_frames.set(0);
-        } else {
-            self.stable_frames
-                .set(self.stable_frames.get().saturating_add(1));
-        }
-        self.stable_frames.get()
-    }
-
     fn recheck_cache_as_bitmap(&self) {
         let mut write = self.cell.borrow_mut();
-        let should_cache = self.is_bitmap_cached_preference()
-            || !write.filters.is_empty()
-            || self.contains_flag(DisplayObjectFlags::AUTO_BITMAP_CACHED);
+        let should_cache = self.is_bitmap_cached_preference() || !write.filters.is_empty();
         if should_cache {
             write.cache.get_or_insert_default();
         } else {
@@ -2434,56 +2414,6 @@ pub trait TDisplayObject<'gc>:
     #[no_dynamic]
     fn pre_render(self, _context: &mut RenderContext<'_, 'gc>) {
         let this = self.base();
-
-        // Heuristic auto bitmap cache: promotes complex subtrees that have
-        // gone several frames without any transform/child/graphic change
-        // into the existing (author-driven) cacheAsBitmap render path, and
-        // demotes them the instant something invalidates them again. This
-        // is purely a render-cost optimization; it doesn't touch the
-        // AS3-visible `cacheAsBitmap` property.
-        const AUTO_CACHE_STABLE_FRAMES: u16 = 30;
-        const AUTO_CACHE_MIN_CHILDREN: usize = 6;
-        // Sanity cap for the recursive bounds check below. Real cacheable
-        // content (an avatar, a UI cluster) is nowhere near this; a handful
-        // of degenerate objects in AQW report bounds in the millions of
-        // pixels, and auto-caching those causes render_base to redo an
-        // expensive recursive bounds walk every single frame for nothing
-        // (the actual cache texture is always skipped as oversize). Reject
-        // those up front instead of ever attempting to cache them.
-        const AUTO_CACHE_MAX_DIMENSION_PX: f64 = 2048.0;
-
-        let stable_frames = this.tick_stable_frames();
-        let was_auto_cached = this.contains_flag(DisplayObjectFlags::AUTO_BITMAP_CACHED);
-
-        if stable_frames == 0 {
-            this.set_flag(DisplayObjectFlags::AUTO_CACHE_REJECTED, false);
-            if was_auto_cached {
-                this.set_flag(DisplayObjectFlags::AUTO_BITMAP_CACHED, false);
-                this.recheck_cache_as_bitmap();
-            }
-        } else if !was_auto_cached
-            && !this.contains_flag(DisplayObjectFlags::AUTO_CACHE_REJECTED)
-            && !this.is_bitmap_cached_preference()
-            && stable_frames >= AUTO_CACHE_STABLE_FRAMES
-            && self
-                .as_container()
-                .is_some_and(|c| c.num_children() >= AUTO_CACHE_MIN_CHILDREN)
-        {
-            let bounds = self.local_bounds(BoundsMode::Engine);
-            let width = bounds.width().to_pixels();
-            let height = bounds.height().to_pixels();
-            let sane = width > 0.0
-                && height > 0.0
-                && width <= AUTO_CACHE_MAX_DIMENSION_PX
-                && height <= AUTO_CACHE_MAX_DIMENSION_PX;
-            if sane {
-                this.set_flag(DisplayObjectFlags::AUTO_BITMAP_CACHED, true);
-                this.recheck_cache_as_bitmap();
-            } else {
-                this.set_flag(DisplayObjectFlags::AUTO_CACHE_REJECTED, true);
-            }
-        }
-
         this.clear_invalidate_flag();
         this.scroll_rect
             .set(this.has_scroll_rect().then(|| this.next_scroll_rect.get()));
@@ -3075,17 +3005,6 @@ bitflags! {
         /// (they need to be instantiated "manually" by
         /// `Sprite.constructChildren`).
         const MANUAL_FRAME_CONSTRUCT  = 1 << 16;
-
-        /// Set when this object has been automatically opted into bitmap
-        /// caching by the stable-frames heuristic (as opposed to the SWF
-        /// author's own `cacheAsBitmap` or a filter). See `recheck_cache_as_bitmap`.
-        const AUTO_BITMAP_CACHED      = 1 << 17;
-
-        /// Set when the stable-frames heuristic checked this object's bounds
-        /// and found them too large (or degenerate) to auto-cache. Prevents
-        /// re-running that bounds check every frame; cleared on invalidation
-        /// so a genuinely resized object gets re-evaluated later.
-        const AUTO_CACHE_REJECTED     = 1 << 18;
     }
 }
 
