@@ -236,6 +236,8 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
         let transforms = DynamicTransforms::new(&descriptors);
         let active_frame = ActiveFrame::new(&descriptors);
 
+        tracing::info!("[stats] ruffle_render_wgpu instrumentation active");
+
         Ok(Self {
             descriptors,
             target,
