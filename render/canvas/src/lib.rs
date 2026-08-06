@@ -879,7 +879,12 @@ impl CommandHandler for WebCanvasRenderBackend {
         }
     }
 
-    fn blend(&mut self, commands: CommandList, blend: RenderBlendMode) {
+    fn blend(
+        &mut self,
+        commands: CommandList,
+        blend: RenderBlendMode,
+        _bounds: swf::Rectangle<swf::Twips>,
+    ) {
         self.push_blend_mode(blend);
         commands.execute(self);
         self.pop_blend_mode();

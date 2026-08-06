@@ -1593,9 +1593,20 @@ pub fn draw<'gc>(
         render_context.commands
     } else {
         let mut commands = CommandList::new();
+        // Not the hot per-frame display-list blend path (see display_object.rs),
+        // just a one-off BitmapData.draw() call, so there's no tighter bounds
+        // worth computing here -- the target bitmap's own size is already
+        // the correct/exact bound (nothing outside it is visible anyway).
+        let bounds = Rectangle {
+            x_min: Twips::ZERO,
+            x_max: Twips::from_pixels(target.width() as f64),
+            y_min: Twips::ZERO,
+            y_max: Twips::from_pixels(target.height() as f64),
+        };
         commands.blend(
             render_context.commands,
             RenderBlendMode::Builtin(blend_mode),
+            bounds,
         );
         commands
     };

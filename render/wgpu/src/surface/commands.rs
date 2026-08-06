@@ -17,7 +17,7 @@ use ruffle_render::pixel_bender::PixelBenderShaderHandle;
 use ruffle_render::quality::StageQuality;
 use ruffle_render::transform::Transform;
 use std::mem;
-use swf::{BlendMode, Color, ColorTransform, Twips};
+use swf::{BlendMode, Color, ColorTransform, Rectangle, Twips};
 use wgpu::Backend;
 
 use super::target::PoolOrArcTexture;
@@ -445,6 +445,12 @@ pub enum Chunk {
         texture: PoolOrArcTexture,
         blend_mode: ChunkBlendMode,
         needs_stencil: bool,
+        /// Where and at what size to draw `texture` back into the parent
+        /// target. For Complex blends this replaces the old fixed
+        /// whole-target quad; Shader blends don't use it (see the Shader
+        /// arm in `Surface::draw_commands`), it's carried alongside just so
+        /// `Chunk::Blend` has one consistent shape.
+        composite_matrix: Matrix,
     },
 }
 
@@ -675,28 +681,92 @@ impl<'a> WgpuCommandHandler<'a> {
 }
 
 impl CommandHandler for WgpuCommandHandler<'_> {
-    fn blend(&mut self, commands: CommandList, blend_mode: RenderBlendMode) {
-        // This offscreen buffer only exists to be composited straight back into
-        // the parent target by a single fullscreen quad draw immediately after
-        // (see Complex/Shader handling in Surface::draw_commands); MSAA here
-        // only smooths its own internal edges before that composite, it does
-        // not affect the final on-screen antialiasing (the parent target keeps
-        // self.quality). Crowded scenes hit this path 100+ times per frame, so
-        // forcing it to single-sample cuts real fill-rate/bandwidth cost for a
-        // visual difference that's limited to blended objects' own edges.
-        let surface = Surface::new(
-            self.descriptors,
-            StageQuality::Low,
-            self.width,
-            self.height,
-            wgpu::TextureFormat::Rgba8Unorm,
-        );
+    fn blend(&mut self, commands: CommandList, blend_mode: RenderBlendMode, bounds: Rectangle<Twips>) {
         let target_layer = if let RenderBlendMode::Builtin(BlendMode::Layer) = &blend_mode {
             LayerRef::Current
         } else {
             self.nearest_layer
         };
         let blend_type = BlendType::from(blend_mode);
+
+        // Every blend used to render its subtree into an offscreen buffer
+        // sized to the *entire stage*, no matter how small the blended
+        // object actually is on screen (a 50x80px glow effect still paid
+        // for clearing and compositing a ~960x550+ buffer). Shrinking that
+        // buffer to the object's own bounds, and positioning the composite
+        // quad to match, is the single biggest lever available here short
+        // of real draw-call batching -- crowded scenes hit this path
+        // 100-300+ times a frame.
+        //
+        // Shader blends go through a separate PixelBender compositing path
+        // (see the Shader arm in Surface::draw_commands) that doesn't
+        // consume `composite_matrix`, and were never observed at all in the
+        // traffic this was tuned against (blend_shader stayed 0 in every
+        // capture). Leave that path on the original full-target buffer
+        // rather than risk changing something never exercised or verified
+        // here.
+        let (surface_width, surface_height, commands, composite_matrix) =
+            if let BlendType::Shader(_) = &blend_type {
+                (
+                    self.width,
+                    self.height,
+                    commands,
+                    Matrix::scale(self.width as f32, self.height as f32),
+                )
+            } else {
+                // Clamp to the render target on every side: this is also
+                // what makes fully off-screen blended content free, and
+                // protects against the rare display object that reports
+                // degenerate (huge) bounds -- auto bitmap-caching one of
+                // those previously caused a severe field regression, so this
+                // clamp is deliberate, not just an optimization.
+                let x_min = bounds.x_min.to_pixels().floor().max(0.0);
+                let y_min = bounds.y_min.to_pixels().floor().max(0.0);
+                let x_max = bounds.x_max.to_pixels().ceil().min(self.width as f64);
+                let y_max = bounds.y_max.to_pixels().ceil().min(self.height as f64);
+
+                let width_px = (x_max - x_min).max(0.0) as u32;
+                let height_px = (y_max - y_min).max(0.0) as u32;
+
+                if width_px == 0 || height_px == 0 {
+                    // Nothing on-screen to blend. Drop the sub-commands
+                    // instead of paying for a full clear/render/composite of
+                    // a result nobody will ever see.
+                    return;
+                }
+
+                let clamped_bounds = Rectangle {
+                    x_min: Twips::from_pixels(x_min),
+                    x_max: Twips::from_pixels(x_min + width_px as f64),
+                    y_min: Twips::from_pixels(y_min),
+                    y_max: Twips::from_pixels(y_min + height_px as f64),
+                };
+                // The sub-commands were recorded in full-stage coordinates;
+                // rebase them onto the smaller buffer's own origin.
+                let mut commands = commands;
+                commands.translate(-clamped_bounds.x_min, -clamped_bounds.y_min);
+
+                (
+                    width_px,
+                    height_px,
+                    commands,
+                    Matrix::create_box_from_rectangle(&clamped_bounds),
+                )
+            };
+
+        // This offscreen buffer only exists to be composited straight back into
+        // the parent target by a single quad draw immediately after (see
+        // Complex/Shader handling in Surface::draw_commands); MSAA here only
+        // smooths its own internal edges before that composite, it does not
+        // affect the final on-screen antialiasing (the parent target keeps
+        // self.quality).
+        let surface = Surface::new(
+            self.descriptors,
+            StageQuality::Low,
+            surface_width,
+            surface_height,
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
         let clear_color = blend_type.default_color();
         let target = surface.draw_commands(
             RenderTargetMode::FreshWithColor(clear_color),
@@ -727,7 +797,7 @@ impl CommandHandler for WgpuCommandHandler<'_> {
             BlendType::Trivial(blend_mode) => {
                 crate::stats::record_blend_trivial();
                 let transform = Transform {
-                    matrix: Matrix::scale(target.width() as f32, target.height() as f32),
+                    matrix: composite_matrix,
                     color_transform: Default::default(),
                     perspective_projection: None,
                 };
@@ -797,6 +867,7 @@ impl CommandHandler for WgpuCommandHandler<'_> {
                     texture: target.take_color_texture(),
                     blend_mode: chunk_blend_mode,
                     needs_stencil: self.num_masks > 0,
+                    composite_matrix,
                 });
                 self.needs_stencil = self.num_masks > 0;
             }

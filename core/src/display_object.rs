@@ -1139,7 +1139,18 @@ pub fn render_base<'gc>(
             } else {
                 RenderBlendMode::Builtin(blend_mode.try_into().unwrap())
             };
-            context.commands.blend(sub_commands, render_blend_mode);
+            // Lets render backends size an offscreen compositing buffer to
+            // the blended content's actual on-screen area instead of the
+            // whole stage. Same bounds computation cacheAsBitmap already
+            // uses above, just for the blend's own subtree.
+            let blend_bounds = this.render_bounds_with_transform(
+                &context.transform_stack.transform().matrix,
+                true,
+                &context.stage.view_matrix(),
+            );
+            context
+                .commands
+                .blend(sub_commands, render_blend_mode, blend_bounds);
         }
     }
 
