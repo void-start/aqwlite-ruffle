@@ -190,6 +190,7 @@ impl<'pass, 'frame: 'pass, 'global: 'frame> CommandRenderer<'pass, 'frame, 'glob
         indices: wgpu::BufferSlice<'pass>,
         num_indices: u32,
     ) {
+        crate::stats::record_draw_call();
         self.render_pass.set_vertex_buffer(0, vertices);
         self.render_pass
             .set_index_buffer(indices, wgpu::IndexFormat::Uint32);
@@ -716,6 +717,7 @@ impl CommandHandler for WgpuCommandHandler<'_> {
 
         match blend_type {
             BlendType::Trivial(blend_mode) => {
+                crate::stats::record_blend_trivial();
                 let transform = Transform {
                     matrix: Matrix::scale(target.width() as f32, target.height() as f32),
                     color_transform: Default::default(),
@@ -761,6 +763,11 @@ impl CommandHandler for WgpuCommandHandler<'_> {
                 );
             }
             blend_type => {
+                match &blend_type {
+                    BlendType::Complex(_) => crate::stats::record_blend_complex(),
+                    BlendType::Shader(_) => crate::stats::record_blend_shader(),
+                    BlendType::Trivial(_) => unreachable!(),
+                }
                 if !self.current.is_empty() {
                     self.result.push(Chunk::Draw {
                         chunk: mem::take(&mut self.current),

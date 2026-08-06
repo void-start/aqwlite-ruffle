@@ -529,6 +529,8 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             }
         };
 
+        crate::stats::begin_frame(cache_entries.len() as u32);
+
         for entry in cache_entries {
             let texture = as_texture(&entry.handle);
             let surface = Surface::new(
@@ -631,6 +633,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         self.active_frame
             .submit_for_target(&self.descriptors, &self.target, frame_output);
         self.offscreen_texture_pool = TexturePool::new();
+        crate::stats::end_frame();
     }
 
     #[instrument(level = "debug", skip_all)]
