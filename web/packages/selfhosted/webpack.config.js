@@ -23,12 +23,31 @@ export default function (_env, _argv) {
             path: url.fileURLToPath(new URL("dist", import.meta.url)),
             filename: "ruffle.js",
             publicPath: "",
-            chunkFilename: "core.ruffle.[contenthash].js",
+            // Nomes fixos (sem [contenthash]) de proposito: o AQWLite embute
+            // esses arquivos como recurso no .exe (resources/resource.rc) e
+            // os extrai pelo nome exato em App.cpp. Se o hash mudasse a cada
+            // build, toda mudanca no Ruffle quebraria o launcher em silencio
+            // ate alguem atualizar os dois arquivos C++ na mao.
+            chunkFilename: "core.ruffle.js",
             clean: true,
         },
         performance: {
             assetFilter: (assetFilename) =>
                 !/\.(map|wasm)$/i.test(assetFilename),
+        },
+        module: {
+            rules: [
+                {
+                    // Mesmo motivo do chunkFilename acima: forca o .wasm a
+                    // sair sempre com o mesmo nome, em vez do default do
+                    // webpack ([hash].wasm).
+                    test: /\.wasm$/,
+                    type: "asset/resource",
+                    generator: {
+                        filename: "core.ruffle.wasm",
+                    },
+                },
+            ],
         },
         optimization: {
             minimizer: [
