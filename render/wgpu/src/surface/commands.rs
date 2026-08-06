@@ -676,9 +676,17 @@ impl<'a> WgpuCommandHandler<'a> {
 
 impl CommandHandler for WgpuCommandHandler<'_> {
     fn blend(&mut self, commands: CommandList, blend_mode: RenderBlendMode) {
+        // This offscreen buffer only exists to be composited straight back into
+        // the parent target by a single fullscreen quad draw immediately after
+        // (see Complex/Shader handling in Surface::draw_commands); MSAA here
+        // only smooths its own internal edges before that composite, it does
+        // not affect the final on-screen antialiasing (the parent target keeps
+        // self.quality). Crowded scenes hit this path 100+ times per frame, so
+        // forcing it to single-sample cuts real fill-rate/bandwidth cost for a
+        // visual difference that's limited to blended objects' own edges.
         let surface = Surface::new(
             self.descriptors,
-            self.quality,
+            StageQuality::Low,
             self.width,
             self.height,
             wgpu::TextureFormat::Rgba8Unorm,
