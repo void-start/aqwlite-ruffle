@@ -996,7 +996,7 @@ impl CommandHandler for WgpuCommandHandler<'_> {
     fn render_alpha_mask(&mut self, maskee_commands: CommandList, mask_commands: CommandList) {
         let surface = Surface::new(
             self.descriptors,
-            self.quality,
+            StageQuality::Low,
             self.width,
             self.height,
             wgpu::TextureFormat::Rgba8Unorm,
