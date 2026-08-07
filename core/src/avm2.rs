@@ -420,23 +420,15 @@ impl<'gc> Avm2<'gc> {
             return;
         }
 
-        let el_length = context
+        let listeners = context
             .avm2
             .broadcast_list
             .entry(event_name)
             .or_default()
-            .len();
+            .clone();
 
-        for i in 0..el_length {
-            let object = context
-                .avm2
-                .broadcast_list
-                .get(&event_name)
-                .unwrap()
-                .get(i)
-                .copied();
-
-            if let Some(object) = object.and_then(|obj| obj.upgrade(context.gc()))
+        for object in listeners {
+            if let Some(object) = object.upgrade(context.gc())
                 && object.is_of_type(on_type.inner_class_definition())
             {
                 let mut activation = Activation::from_nothing(context);
