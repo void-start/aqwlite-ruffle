@@ -343,7 +343,12 @@ impl Surface {
                     // can't reuse the cached `whole_frame_bind_group`.
                     let composite_bind_group =
                         composite_transform_bind_group(descriptors, composite_matrix);
-                    render_pass.set_bind_group(1, &composite_bind_group, &[]);
+                    // This layout is shared with the per-object dynamic
+                    // transforms buffer, so it always requires a dynamic
+                    // offset even though this one-off buffer only ever has
+                    // a single entry at offset 0 (same as the old
+                    // whole_frame_bind_group's &[0] here).
+                    render_pass.set_bind_group(1, &composite_bind_group, &[0]);
                     render_pass.set_bind_group(2, &blend_bind_group, &[]);
 
                     render_pass.set_vertex_buffer(0, descriptors.quad.vertices_pos.slice(..));
