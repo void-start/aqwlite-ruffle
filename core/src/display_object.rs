@@ -843,7 +843,9 @@ impl<'gc> DisplayObjectBase<'gc> {
 
     fn recheck_cache_as_bitmap(&self) {
         let mut write = self.cell.borrow_mut();
-        let should_cache = self.is_bitmap_cached_preference() || !write.filters.is_empty();
+        let should_cache = self.is_bitmap_cached_preference()
+            || !write.filters.is_empty()
+            || self.contains_flag(DisplayObjectFlags::AVATAR_BODY);
         if should_cache {
             write.cache.get_or_insert_default();
         } else {
@@ -2839,6 +2841,9 @@ pub trait TDisplayObject<'gc>:
         let is_body = !is_mine.coerce_to_boolean();
         base.set_flag(DisplayObjectFlags::AVATAR_BODY, is_body);
         base.set_flag(DisplayObjectFlags::AVATAR_BODY_CHECKED, true);
+        if is_body {
+            base.recheck_cache_as_bitmap();
+        }
         is_body
     }
 
