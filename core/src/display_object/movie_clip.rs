@@ -2529,6 +2529,10 @@ impl<'gc> TDisplayObject<'gc> for MovieClip<'gc> {
     }
 
     fn enter_frame(self, context: &mut UpdateContext<'gc>) {
+        if self.current_frame() > 1 && self.is_avatar_body(context) {
+            return;
+        }
+
         let skip_frame = self.base().should_skip_next_enter_frame();
         //Child removals from looping gotos appear to resolve in reverse order.
         for child in self.iter_render_list().rev() {

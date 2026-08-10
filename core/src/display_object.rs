@@ -9,7 +9,7 @@ use crate::avm2::{
 use crate::context::{RenderContext, UpdateContext};
 use crate::drawing::Drawing;
 use crate::prelude::*;
-use crate::string::{AvmString, WString};
+use crate::string::{AvmString, WStr, WString};
 use crate::tag_utils::SwfMovie;
 use crate::types::{Degrees, Percent};
 use crate::vminterface::Instantiator;
@@ -2800,6 +2800,48 @@ pub trait TDisplayObject<'gc>:
         }
     }
 
+    #[no_dynamic]
+    fn is_avatar_body(self, context: &mut UpdateContext<'gc>) -> bool {
+        let base = self.base();
+        if base.contains_flag(DisplayObjectFlags::AVATAR_BODY_CHECKED) {
+            return base.contains_flag(DisplayObjectFlags::AVATAR_BODY);
+        }
+
+        let Some(object) = self.object2() else {
+            return false;
+        };
+        if &*object.instance_class().name().local_name() != WStr::from_units(b"mcSkel") {
+            base.set_flag(DisplayObjectFlags::AVATAR_BODY, false);
+            base.set_flag(DisplayObjectFlags::AVATAR_BODY_CHECKED, true);
+            return false;
+        }
+
+        let Some(owner) = self.parent().and_then(|parent| parent.object2()) else {
+            return false;
+        };
+        let owner: Avm2Value<'gc> = owner.into();
+
+        let mut activation = Avm2Activation::from_nothing(context);
+        let owner_name = AvmString::new_utf8(activation.gc(), "pAV");
+        let Ok(avatar) = owner.get_public_property(owner_name, &mut activation) else {
+            return false;
+        };
+        if matches!(avatar, Avm2Value::Null | Avm2Value::Undefined) {
+            return false;
+        }
+
+        let mine_name = AvmString::new_utf8(activation.gc(), "isMyAvatar");
+        let Ok(is_mine) = avatar.get_public_property(mine_name, &mut activation) else {
+            return false;
+        };
+        drop(activation);
+
+        let is_body = !is_mine.coerce_to_boolean();
+        base.set_flag(DisplayObjectFlags::AVATAR_BODY, is_body);
+        base.set_flag(DisplayObjectFlags::AVATAR_BODY_CHECKED, true);
+        is_body
+    }
+
     /// Inform this object and its ancestors that it has visually changed and must be redrawn.
     /// If this object or any ancestor is marked as cacheAsBitmap, it will invalidate that cache.
     #[no_dynamic]
@@ -3016,6 +3058,10 @@ bitflags! {
         /// (they need to be instantiated "manually" by
         /// `Sprite.constructChildren`).
         const MANUAL_FRAME_CONSTRUCT  = 1 << 16;
+
+        const AVATAR_BODY_CHECKED     = 1 << 17;
+
+        const AVATAR_BODY             = 1 << 18;
     }
 }
 
