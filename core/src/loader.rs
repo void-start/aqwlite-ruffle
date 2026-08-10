@@ -216,6 +216,8 @@ impl From<crate::avm1::Error<'_>> for Error {
     }
 }
 
+const DETACHED_LOADER_GRACE_TICKS: u32 = 120;
+
 /// Holds all in-progress loads for the player.
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -320,6 +322,7 @@ impl<'gc> LoadManager<'gc> {
             vm_data,
             loader_status: LoaderStatus::Pending,
             movie: None,
+            detached_ticks: 0,
         };
         let handle = self.add_loader(loader);
         let loader = self.get_loader_mut(handle).unwrap();
@@ -408,6 +411,7 @@ impl<'gc> LoadManager<'gc> {
             vm_data,
             loader_status: LoaderStatus::Pending,
             movie: None,
+            detached_ticks: 0,
         };
         let handle = context.load_manager.add_loader(loader);
         MovieLoader::movie_loader_bytes(handle, context, loader_url, bytes)
@@ -485,6 +489,41 @@ impl<'gc> LoadManager<'gc> {
                 && movie.try_fire_loaderinfo_events(context)
             {
                 context.load_manager.remove_loader(handle)
+            }
+        }
+        Self::drop_detached_loaders(context);
+    }
+
+    fn drop_detached_loaders(context: &mut UpdateContext<'gc>) {
+        let handles: Vec<_> = context.load_manager.0.iter().map(|(h, _)| h).collect();
+        for handle in handles {
+            let Some(loader) = context.load_manager.get_loader(handle) else {
+                continue;
+            };
+            if !matches!(
+                loader.loader_status,
+                LoaderStatus::Succeeded | LoaderStatus::Failed
+            ) {
+                continue;
+            }
+            let target_clip = loader.target_clip;
+            let detached = !target_clip.is_on_stage(context);
+
+            if !detached {
+                if let Some(loader) = context.load_manager.get_loader_mut(handle) {
+                    loader.detached_ticks = 0;
+                }
+                continue;
+            }
+
+            let Some(loader) = context.load_manager.get_loader_mut(handle) else {
+                continue;
+            };
+            loader.detached_ticks = loader.detached_ticks.saturating_add(1);
+            let ticks = loader.detached_ticks;
+
+            if ticks >= DETACHED_LOADER_GRACE_TICKS {
+                context.load_manager.remove_loader(handle);
             }
         }
     }
@@ -593,6 +632,9 @@ pub struct MovieLoader<'gc> {
     /// completed and we expect the Player to periodically tick preload
     /// until loading completes.
     movie: Option<Arc<SwfMovie>>,
+
+    #[collect(require_static)]
+    detached_ticks: u32,
 }
 
 impl<'gc> MovieLoader<'gc> {
