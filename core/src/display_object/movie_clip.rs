@@ -1063,6 +1063,24 @@ impl<'gc> MovieClip<'gc> {
     }
 
     /// Yield the current frame label as a tuple of string and frame number.
+    pub fn current_label_is(self, name: &WStr) -> bool {
+        let read = self.0.shared_cell();
+        let current_frame = self.0.current_frame();
+
+        let mut best: Option<(&WString, FrameNumber)> = None;
+        for (frame, label) in read.frame_labels.iter() {
+            if *frame > current_frame {
+                continue;
+            }
+
+            if best.map(|v| *frame >= v.1).unwrap_or(true) {
+                best = Some((label, *frame));
+            }
+        }
+
+        best.map(|(label, _)| &**label == name).unwrap_or(false)
+    }
+
     pub fn current_label(self) -> Option<(WString, FrameNumber)> {
         let read = self.0.shared_cell();
         let current_frame = self.0.current_frame();
@@ -2529,7 +2547,10 @@ impl<'gc> TDisplayObject<'gc> for MovieClip<'gc> {
     }
 
     fn enter_frame(self, context: &mut UpdateContext<'gc>) {
-        if self.current_frame() > 1 && self.is_avatar_body(context) {
+        if self.current_frame() > 1
+            && self.is_avatar_body(context)
+            && self.current_label_is(WStr::from_units(b"Idle"))
+        {
             return;
         }
 
