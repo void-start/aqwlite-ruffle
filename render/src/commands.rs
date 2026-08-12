@@ -15,7 +15,12 @@ pub trait CommandHandler {
     );
     fn render_stage3d(&mut self, bitmap: BitmapHandle, transform: Transform);
     fn render_shape(&mut self, shape: ShapeHandle, transform: Transform);
-    fn render_alpha_mask(&mut self, maskee_commands: CommandList, mask_commands: CommandList);
+    fn render_alpha_mask(
+        &mut self,
+        maskee_commands: CommandList,
+        mask_commands: CommandList,
+        bounds: Rectangle<Twips>,
+    );
     fn draw_rect(&mut self, color: Color, matrix: Matrix);
     fn draw_line(&mut self, color: Color, matrix: Matrix);
     fn draw_line_rect(&mut self, color: Color, matrix: Matrix);
@@ -90,7 +95,8 @@ impl CommandList {
                 Command::RenderAlphaMask {
                     maskee_commands,
                     mask_commands,
-                } => handler.render_alpha_mask(maskee_commands, mask_commands),
+                    bounds,
+                } => handler.render_alpha_mask(maskee_commands, mask_commands, bounds),
             }
         }
     }
@@ -135,11 +141,17 @@ impl CommandHandler for CommandList {
         }
     }
 
-    fn render_alpha_mask(&mut self, maskee_commands: CommandList, mask_commands: CommandList) {
+    fn render_alpha_mask(
+        &mut self,
+        maskee_commands: CommandList,
+        mask_commands: CommandList,
+        bounds: Rectangle<Twips>,
+    ) {
         if self.maskers_in_progress <= 1 {
             self.commands.push(Command::RenderAlphaMask {
                 maskee_commands,
                 mask_commands,
+                bounds,
             });
         }
     }
@@ -225,6 +237,7 @@ pub enum Command {
     RenderAlphaMask {
         maskee_commands: CommandList,
         mask_commands: CommandList,
+        bounds: Rectangle<Twips>,
     },
     DrawRect {
         color: Color,
@@ -271,9 +284,14 @@ impl Command {
             Command::RenderAlphaMask {
                 maskee_commands,
                 mask_commands,
+                bounds,
             } => {
                 maskee_commands.translate(dx, dy);
                 mask_commands.translate(dx, dy);
+                bounds.x_min += dx;
+                bounds.x_max += dx;
+                bounds.y_min += dy;
+                bounds.y_max += dy;
             }
             Command::DrawRect { matrix, .. }
             | Command::DrawLine { matrix, .. }

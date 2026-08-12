@@ -993,12 +993,41 @@ impl CommandHandler for WgpuCommandHandler<'_> {
         self.current.push(DrawCommand::PopMask);
     }
 
-    fn render_alpha_mask(&mut self, maskee_commands: CommandList, mask_commands: CommandList) {
+    fn render_alpha_mask(
+        &mut self,
+        maskee_commands: CommandList,
+        mask_commands: CommandList,
+        bounds: Rectangle<Twips>,
+    ) {
+        let x_min = bounds.x_min.to_pixels().floor().max(0.0);
+        let y_min = bounds.y_min.to_pixels().floor().max(0.0);
+        let x_max = bounds.x_max.to_pixels().ceil().min(self.width as f64);
+        let y_max = bounds.y_max.to_pixels().ceil().min(self.height as f64);
+
+        let width_px = (x_max - x_min).max(0.0) as u32;
+        let height_px = (y_max - y_min).max(0.0) as u32;
+
+        if width_px == 0 || height_px == 0 {
+            return;
+        }
+
+        let clamped_bounds = Rectangle {
+            x_min: Twips::from_pixels(x_min),
+            x_max: Twips::from_pixels(x_min + width_px as f64),
+            y_min: Twips::from_pixels(y_min),
+            y_max: Twips::from_pixels(y_min + height_px as f64),
+        };
+
+        let mut maskee_commands = maskee_commands;
+        let mut mask_commands = mask_commands;
+        maskee_commands.translate(-clamped_bounds.x_min, -clamped_bounds.y_min);
+        mask_commands.translate(-clamped_bounds.x_min, -clamped_bounds.y_min);
+
         let surface = Surface::new(
             self.descriptors,
             StageQuality::Low,
-            self.width,
-            self.height,
+            width_px,
+            height_px,
             wgpu::TextureFormat::Rgba8Unorm,
         );
 
@@ -1014,7 +1043,7 @@ impl CommandHandler for WgpuCommandHandler<'_> {
             self.texture_pool,
         );
         maskee.ensure_cleared(self.draw_encoder);
-        let matrix = Matrix::scale(maskee.width() as f32, maskee.height() as f32);
+        let matrix = Matrix::create_box_from_rectangle(&clamped_bounds);
         let maskee = maskee.take_color_texture();
 
         let mask = surface.draw_commands(

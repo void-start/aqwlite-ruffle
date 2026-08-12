@@ -1249,9 +1249,15 @@ pub fn apply_standard_mask_and_scroll<'gc, F>(
 
         let mask_commands = std::mem::replace(&mut context.commands, original_commands);
 
+        let mask_bounds = this.render_bounds_with_transform(
+            &context.transform_stack.transform().matrix,
+            true,
+            &context.stage.view_matrix(),
+        );
+
         context
             .commands
-            .render_alpha_mask(maskee_commands, mask_commands);
+            .render_alpha_mask(maskee_commands, mask_commands, mask_bounds);
     } else {
         draw(context);
     }
