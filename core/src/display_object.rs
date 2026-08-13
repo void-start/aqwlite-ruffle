@@ -845,7 +845,8 @@ impl<'gc> DisplayObjectBase<'gc> {
         let mut write = self.cell.borrow_mut();
         let should_cache = self.is_bitmap_cached_preference()
             || !write.filters.is_empty()
-            || self.contains_flag(DisplayObjectFlags::AVATAR_BODY);
+            || (self.contains_flag(DisplayObjectFlags::AVATAR_BODY)
+                && !self.contains_flag(DisplayObjectFlags::AVATAR_CACHE_REJECTED));
         if should_cache {
             write.cache.get_or_insert_default();
         } else {
@@ -959,6 +960,7 @@ pub fn render_base<'gc>(
 
     let cache_info = if context.use_bitmap_cache && this.is_bitmap_cached() {
         let mut cache_info: Option<DrawCacheInfo> = None;
+        let mut reject_avatar_cache = false;
         let base_transform = context.transform_stack.transform();
         let bounds: Rectangle<Twips> = this.render_bounds_with_transform(
             &base_transform.matrix,
@@ -1034,7 +1036,13 @@ pub fn render_base<'gc>(
                 }
                 cache.clear();
                 cache_info = None;
+                reject_avatar_cache = this.base().contains_flag(DisplayObjectFlags::AVATAR_BODY);
             }
+        }
+        if reject_avatar_cache {
+            this.base()
+                .set_flag(DisplayObjectFlags::AVATAR_CACHE_REJECTED, true);
+            this.base().recheck_cache_as_bitmap();
         }
         cache_info
     } else {
@@ -3073,6 +3081,8 @@ bitflags! {
         const AVATAR_BODY_CHECKED     = 1 << 17;
 
         const AVATAR_BODY             = 1 << 18;
+
+        const AVATAR_CACHE_REJECTED   = 1 << 19;
     }
 }
 
