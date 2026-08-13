@@ -338,6 +338,8 @@ pub struct Player {
     frame_accumulator: FloatDuration,
     recent_run_frame_timings: VecDeque<f64>,
 
+    mem_log_countdown: u32,
+
     /// Faked time passage for fooling hand-written busy-loop FPS limiters.
     time_offset: u32,
 
@@ -2030,7 +2032,42 @@ impl Player {
             }
         });
 
+        self.log_memory_stats();
+
         self.needs_render = true;
+    }
+
+    fn log_memory_stats(&mut self) {
+        const MEM_LOG_INTERVAL_FRAMES: u32 = 60;
+
+        if self.mem_log_countdown > 0 {
+            self.mem_log_countdown -= 1;
+            return;
+        }
+        self.mem_log_countdown = MEM_LOG_INTERVAL_FRAMES;
+
+        let Ok(arena) = self.gc_arena.try_borrow() else {
+            return;
+        };
+
+        let metrics = arena.metrics();
+        let gc = metrics.total_gc_allocation();
+        let external = metrics.total_external_allocation();
+
+        let movies = arena.mutate(|_, root| {
+            root.data
+                .try_borrow()
+                .map(|data| data.library.known_movies().count())
+        });
+
+        let Ok(movies) = movies else {
+            return;
+        };
+
+        tracing::info!(
+            target: "ruffle_core::stats",
+            "[stats] gc_bytes={gc} external_bytes={external} movie_libraries={movies}"
+        );
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -3010,6 +3047,7 @@ impl PlayerBuilder {
                 frame_phase: Default::default(),
                 frame_accumulator: FloatDuration::ZERO,
                 recent_run_frame_timings: VecDeque::with_capacity(10),
+                mem_log_countdown: 0,
                 start_time: Instant::now(),
                 time_offset: 0,
                 time_til_next_timer: None,
