@@ -26,10 +26,7 @@ package flash.system {
             return 1024*1024*100; // 100MB
         }
 
-        public static function get totalMemoryNumber():Number {
-            stub_getter("flash.system.System", "totalMemoryNumber");
-            return 1024*1024*90; // 90MB
-        }
+        public static native function get totalMemoryNumber():Number;
 
         public static function get totalMemory():uint {
             return totalMemoryNumber as uint;

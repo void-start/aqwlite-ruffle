@@ -5,6 +5,17 @@ use crate::avm2::activation::Activation;
 use crate::avm2::parameters::ParametersExt;
 use crate::avm2::value::Value;
 
+/// Implements `flash.system.System.totalMemoryNumber` getter
+pub fn get_total_memory_number<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    _this: Value<'gc>,
+    _args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    let bytes = activation.gc().metrics().total_allocation();
+
+    Ok(Value::Number(bytes as f64))
+}
+
 /// Implements `flash.system.System.setClipboard` method
 pub fn set_clipboard<'gc>(
     activation: &mut Activation<'_, 'gc>,
