@@ -119,7 +119,7 @@ impl<'gc> Avm2ClassRegistry<'gc> {
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct MovieLibrary<'gc> {
-    swf: Arc<SwfMovie>,
+    swf: Weak<SwfMovie>,
     characters: HashMap<CharacterId, Character<'gc>>,
     export_characters: Avm1PropertyMap<'gc, CharacterId>,
     imported_assets: HashMap<AvmString<'gc>, CharacterId>,
@@ -131,7 +131,7 @@ pub struct MovieLibrary<'gc> {
 impl<'gc> MovieLibrary<'gc> {
     pub fn new(swf: Arc<SwfMovie>) -> Self {
         Self {
-            swf,
+            swf: Arc::downgrade(&swf),
             characters: HashMap::new(),
             imported_assets: HashMap::new(),
             export_characters: Avm1PropertyMap::new(),
@@ -254,9 +254,10 @@ impl<'gc> MovieLibrary<'gc> {
     ) -> Option<DisplayObject<'gc>> {
         match character {
             Character::Bitmap(bitmap) => {
+                let swf = self.swf.upgrade()?;
                 let avm2_class = bitmap.avm2_class();
                 let bitmap = bitmap.compressed().decode().unwrap();
-                let bitmap = Bitmap::new(mc, id, bitmap, self.swf.clone());
+                let bitmap = Bitmap::new(mc, id, bitmap, swf);
                 bitmap.set_avm2_bitmapdata_class(mc, avm2_class);
                 Some(bitmap.instantiate(mc))
             }
