@@ -2055,12 +2055,12 @@ impl Player {
         let external = metrics.total_external_allocation();
 
         let stats = arena.mutate(|_, root| {
-            let mut live = fnv::FnvHashSet::default();
-            collect_live_movies(root.stage.into(), &mut live);
+            root.data.try_borrow().map(|d| {
+                let mut live = fnv::FnvHashSet::default();
+                collect_live_movies(d.stage.into(), &mut live);
 
-            root.data
-                .try_borrow()
-                .map(|d| (d.library.library_stats(), d.library.orphan_stats(&live)))
+                (d.library.library_stats(), d.library.orphan_stats(&live))
+            })
         });
 
         let Ok(((movies, characters, domains), (orphans, orphan_characters))) = stats else {
