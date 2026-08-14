@@ -423,6 +423,10 @@ impl<'gc> MovieLibraries<'gc> {
     fn known_movies(&self) -> impl Iterator<Item = Arc<SwfMovie>> {
         self.0.keys()
     }
+
+    fn iter(&self) -> impl Iterator<Item = &MovieLibrary<'gc>> {
+        self.0.iter().map(|(_, val)| val)
+    }
 }
 
 /// Symbol library for multiple movies.
@@ -482,6 +486,22 @@ impl<'gc> Library<'gc> {
 
     pub fn known_movies(&self) -> impl Iterator<Item = Arc<SwfMovie>> {
         self.movie_libraries.known_movies()
+    }
+
+    pub fn library_stats(&self) -> (usize, usize, usize) {
+        let mut libraries = 0;
+        let mut characters = 0;
+        let mut with_domain = 0;
+
+        for library in self.movie_libraries.iter() {
+            libraries += 1;
+            characters += library.characters().len();
+            if library.try_avm2_domain().is_some() {
+                with_domain += 1;
+            }
+        }
+
+        (libraries, characters, with_domain)
     }
 
     /// Returns the default Font implementations behind the built in names (ie `_sans`)

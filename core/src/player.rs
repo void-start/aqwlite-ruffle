@@ -2054,19 +2054,15 @@ impl Player {
         let gc = metrics.total_gc_allocation();
         let external = metrics.total_external_allocation();
 
-        let movies = arena.mutate(|_, root| {
-            root.data
-                .try_borrow()
-                .map(|data| data.library.known_movies().count())
-        });
+        let stats = arena.mutate(|_, root| root.data.try_borrow().map(|d| d.library.library_stats()));
 
-        let Ok(movies) = movies else {
+        let Ok((movies, characters, domains)) = stats else {
             return;
         };
 
         tracing::info!(
             target: "ruffle_core::stats",
-            "[stats] gc_bytes={gc} external_bytes={external} movie_libraries={movies}"
+            "[stats] gc_bytes={gc} external_bytes={external} movie_libraries={movies} characters={characters} domains={domains}"
         );
     }
 
