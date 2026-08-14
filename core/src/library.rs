@@ -127,12 +127,6 @@ pub struct MovieLibrary<'gc> {
     jpeg_tables: Option<Vec<u8>>,
     fonts: FontMap<'gc>,
     avm2_domain: Option<Avm2Domain<'gc>>,
-
-    /// Consecutive `orphan_stats`/`evict_orphaned_movies` sweeps in which
-    /// this library's movie was unreachable from the display list.
-    /// See `ORPHAN_LIBRARY_GRACE_SWEEPS`.
-    #[collect(require_static)]
-    orphan_sweeps: u32,
 }
 
 impl<'gc> MovieLibrary<'gc> {
@@ -145,7 +139,6 @@ impl<'gc> MovieLibrary<'gc> {
             jpeg_tables: None,
             fonts: Default::default(),
             avm2_domain: None,
-            orphan_sweeps: 0,
         }
     }
 
@@ -401,16 +394,6 @@ impl ruffle_render::bitmap::BitmapSource for MovieLibrarySource<'_, '_> {
     }
 }
 
-/// Number of consecutive eviction sweeps (each tied to the ~60-frame stats
-/// interval in `Player::log_memory_stats`) a movie library may go unreachable
-/// from the display list before it is dropped. A registered `Character`
-/// holds a strong `Arc<SwfMovie>` back to its own library's key, so an
-/// orphaned library never expires on its own; something has to drop it.
-/// The grace window mirrors `LoadManager::DETACHED_LOADER_GRACE_TICKS`,
-/// giving a movie that is mid-transition (e.g. a `Loader` swap) a couple of
-/// sweeps to become reachable again before its library is discarded.
-const ORPHAN_LIBRARY_GRACE_SWEEPS: u32 = 2;
-
 struct MovieLibraries<'gc>(PtrWeakKeyHashMap<Weak<SwfMovie>, MovieLibrary<'gc>>);
 
 unsafe impl<'gc> Collect<'gc> for MovieLibraries<'gc> {
@@ -443,28 +426,6 @@ impl<'gc> MovieLibraries<'gc> {
 
     fn iter(&self) -> impl Iterator<Item = &MovieLibrary<'gc>> {
         self.0.iter().map(|(_, val)| val)
-    }
-
-    /// Drops libraries whose movie has been unreachable from the display
-    /// list for `ORPHAN_LIBRARY_GRACE_SWEEPS` consecutive calls. Returns how
-    /// many were evicted.
-    fn evict_orphaned(&mut self, live: &FnvHashSet<usize>) -> usize {
-        let mut evicted = 0;
-        self.0.retain(|movie, library| {
-            if live.contains(&(Arc::as_ptr(&movie) as usize)) {
-                library.orphan_sweeps = 0;
-                return true;
-            }
-
-            library.orphan_sweeps += 1;
-            if library.orphan_sweeps < ORPHAN_LIBRARY_GRACE_SWEEPS {
-                return true;
-            }
-
-            evicted += 1;
-            false
-        });
-        evicted
     }
 }
 
@@ -541,14 +502,6 @@ impl<'gc> Library<'gc> {
         }
 
         (libraries, characters, with_domain)
-    }
-
-    /// Drops libraries orphaned for `ORPHAN_LIBRARY_GRACE_SWEEPS` consecutive
-    /// calls. Must be called with the same `live` set passed to
-    /// `orphan_stats`, and before it, so the reported orphan count reflects
-    /// what's left after eviction.
-    pub fn evict_orphaned_movies(&mut self, live: &FnvHashSet<usize>) -> usize {
-        self.movie_libraries.evict_orphaned(live)
     }
 
     pub fn orphan_stats(&self, live: &FnvHashSet<usize>) -> (usize, usize) {
