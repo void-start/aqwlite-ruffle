@@ -2054,22 +2054,27 @@ impl Player {
         let gc = metrics.total_gc_allocation();
         let external = metrics.total_external_allocation();
 
-        let stats = arena.mutate(|_, root| {
-            root.data.try_borrow().map(|d| {
+        let stats = arena.mutate(|mc, root| {
+            root.data.try_borrow_mut(mc).map(|mut d| {
                 let mut live = fnv::FnvHashSet::default();
                 collect_live_movies(d.stage.into(), &mut live);
 
-                (d.library.library_stats(), d.library.orphan_stats(&live))
+                let evicted = d.library.evict_orphaned_movies(&live);
+                let library_stats = d.library.library_stats();
+                let orphan_stats = d.library.orphan_stats(&live);
+
+                (library_stats, orphan_stats, evicted)
             })
         });
 
-        let Ok(((movies, characters, domains), (orphans, orphan_characters))) = stats else {
+        let Ok(((movies, characters, domains), (orphans, orphan_characters), evicted)) = stats
+        else {
             return;
         };
 
         tracing::info!(
             target: "ruffle_core::stats",
-            "[stats] gc_bytes={gc} external_bytes={external} movie_libraries={movies} characters={characters} domains={domains} orphans={orphans} orphan_characters={orphan_characters}"
+            "[stats] gc_bytes={gc} external_bytes={external} movie_libraries={movies} characters={characters} domains={domains} orphans={orphans} orphan_characters={orphan_characters} evicted={evicted}"
         );
     }
 
