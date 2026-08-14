@@ -2054,15 +2054,22 @@ impl Player {
         let gc = metrics.total_gc_allocation();
         let external = metrics.total_external_allocation();
 
-        let stats = arena.mutate(|_, root| root.data.try_borrow().map(|d| d.library.library_stats()));
+        let stats = arena.mutate(|_, root| {
+            let mut live = fnv::FnvHashSet::default();
+            collect_live_movies(root.stage.into(), &mut live);
 
-        let Ok((movies, characters, domains)) = stats else {
+            root.data
+                .try_borrow()
+                .map(|d| (d.library.library_stats(), d.library.orphan_stats(&live)))
+        });
+
+        let Ok(((movies, characters, domains), (orphans, orphan_characters))) = stats else {
             return;
         };
 
         tracing::info!(
             target: "ruffle_core::stats",
-            "[stats] gc_bytes={gc} external_bytes={external} movie_libraries={movies} characters={characters} domains={domains}"
+            "[stats] gc_bytes={gc} external_bytes={external} movie_libraries={movies} characters={characters} domains={domains} orphans={orphans} orphan_characters={orphan_characters}"
         );
     }
 
@@ -3278,4 +3285,14 @@ pub enum PlayerMode {
 
     /// Represents the debug version of Flash Player, i.e. flashplayerdebugger.
     Debug,
+}
+
+fn collect_live_movies<'gc>(dobj: DisplayObject<'gc>, live: &mut fnv::FnvHashSet<usize>) {
+    live.insert(Arc::as_ptr(&dobj.movie()) as usize);
+
+    if let Some(container) = dobj.as_container() {
+        for child in container.iter_render_list() {
+            collect_live_movies(child, live);
+        }
+    }
 }

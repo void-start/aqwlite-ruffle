@@ -504,6 +504,25 @@ impl<'gc> Library<'gc> {
         (libraries, characters, with_domain)
     }
 
+    pub fn orphan_stats(&self, live: &FnvHashSet<usize>) -> (usize, usize) {
+        let mut orphans = 0;
+        let mut orphan_characters = 0;
+
+        for movie in self.movie_libraries.known_movies() {
+            if live.contains(&(Arc::as_ptr(&movie) as usize)) {
+                continue;
+            }
+
+            orphans += 1;
+
+            if let Some(library) = self.movie_libraries.get(&movie) {
+                orphan_characters += library.characters.len();
+            }
+        }
+
+        (orphans, orphan_characters)
+    }
+
     /// Returns the default Font implementations behind the built in names (ie `_sans`)
     pub fn default_font(
         &mut self,
