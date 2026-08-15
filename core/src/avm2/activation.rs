@@ -267,7 +267,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         user_arguments: FunctionArgs<'_, 'gc>,
         callee: Option<FunctionObject<'gc>>,
     ) -> ArrayObject<'gc> {
-        let mut all_arguments = Vec::new();
+        let mut all_arguments: SmallVec<[Value<'gc>; 4]> = SmallVec::new();
 
         // Unfortunately we need to allocate now: we need to put all the
         // arguments we just processed into a Vec, so `arguments` or `rest`
