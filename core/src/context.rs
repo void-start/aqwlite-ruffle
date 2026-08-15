@@ -89,6 +89,10 @@ pub struct UpdateContext<'gc> {
     /// Requests that the player re-renders after this execution (e.g. due to `updateAfterEvent`).
     pub needs_render: &'gc mut bool,
 
+    /// Requests an immediate garbage collection pass after this execution,
+    /// set by `System.gc()`.
+    pub gc_requested: &'gc mut bool,
+
     /// The root SWF file.
     pub root_swf: &'gc mut Arc<SwfMovie>,
 

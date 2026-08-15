@@ -308,6 +308,7 @@ pub struct Player {
 
     run_state: RunState,
     needs_render: bool,
+    gc_requested: bool,
 
     renderer: Box<dyn RenderBackend>,
     audio: Box<dyn AudioBackend>,
@@ -2037,6 +2038,30 @@ impl Player {
         self.needs_render = true;
     }
 
+    /// Runs the current gc-arena cycle to completion and immediately sweeps
+    /// unreferenced movie libraries, instead of waiting for the natural
+    /// allocation-debt threshold. Triggered by `System.gc()`, which the game
+    /// calls at map transitions — a loading-screen pause already hides
+    /// whatever this costs, instead of it showing up as a stall later.
+    fn force_gc(&mut self) {
+        self.gc_arena.borrow_mut().finish_cycle();
+
+        let Ok(arena) = self.gc_arena.try_borrow() else {
+            return;
+        };
+        let evicted = arena.mutate(|mc, root| {
+            root.data
+                .try_borrow_mut(mc)
+                .map(|mut d| d.library.evict_unreferenced_movies())
+        });
+        if let Ok(evicted) = evicted {
+            tracing::info!(
+                target: "ruffle_core::stats",
+                "[stats] System.gc() forced a collection, evicted={evicted}"
+            );
+        }
+    }
+
     fn log_memory_stats(&mut self) {
         const MEM_LOG_INTERVAL_FRAMES: u32 = 60;
 
@@ -2335,6 +2360,7 @@ impl Player {
                 timers,
                 current_context_menu,
                 needs_render: &mut this.needs_render,
+                gc_requested: &mut this.gc_requested,
                 avm1,
                 avm2,
                 external_interface,
@@ -2428,7 +2454,11 @@ impl Player {
         // GC
         const GC_STALL_THRESHOLD_MS: f64 = 2.0;
         let gc_start = std::time::Instant::now();
-        self.gc_arena.borrow_mut().collect_debt();
+        if std::mem::take(&mut self.gc_requested) {
+            self.force_gc();
+        } else {
+            self.gc_arena.borrow_mut().collect_debt();
+        }
         let gc_elapsed_ms = gc_start.elapsed().as_secs_f64() * 1000.0;
         if gc_elapsed_ms >= GC_STALL_THRESHOLD_MS {
             let gc_bytes = self.gc_arena.borrow().metrics().total_gc_allocation();
@@ -3095,6 +3125,7 @@ impl PlayerBuilder {
                     RunState::Suspended
                 },
                 needs_render: true,
+                gc_requested: false,
                 self_reference: self_ref.clone(),
                 load_behavior: self.load_behavior,
                 spoofed_url: self.spoofed_url.clone(),
