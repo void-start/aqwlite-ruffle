@@ -2426,7 +2426,17 @@ impl Player {
         self.update_mouse_state(EnumSet::empty(), false, &mut false);
 
         // GC
+        const GC_STALL_THRESHOLD_MS: f64 = 2.0;
+        let gc_start = std::time::Instant::now();
         self.gc_arena.borrow_mut().collect_debt();
+        let gc_elapsed_ms = gc_start.elapsed().as_secs_f64() * 1000.0;
+        if gc_elapsed_ms >= GC_STALL_THRESHOLD_MS {
+            let gc_bytes = self.gc_arena.borrow().metrics().total_gc_allocation();
+            tracing::info!(
+                target: "ruffle_core::gc_stall",
+                "[gc_stall] elapsed_ms={gc_elapsed_ms:.2} gc_bytes={gc_bytes}"
+            );
+        }
 
         rval
     }
