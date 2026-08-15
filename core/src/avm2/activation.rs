@@ -29,6 +29,7 @@ use crate::string::{AvmAtom, AvmString, HasStringContext, StringContext};
 use crate::tag_utils::SwfMovie;
 use gc_arena::Gc;
 use ruffle_macros::istr;
+use smallvec::SmallVec;
 use std::cell::Cell;
 use std::cmp::{Ordering, min};
 use std::sync::Arc;
@@ -214,8 +215,8 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         method: Method<'gc>,
         user_arguments: FunctionArgs<'_, 'gc>,
         signature: &[ResolvedParamConfig<'gc>],
-    ) -> Result<Vec<Value<'gc>>, Error<'gc>> {
-        let mut arguments_list = Vec::new();
+    ) -> Result<SmallVec<[Value<'gc>; 4]>, Error<'gc>> {
+        let mut arguments_list = SmallVec::new();
         for (arg, param_config) in user_arguments.iter().zip(signature.iter()) {
             let coerced_arg = if let Some(param_class) = param_config.param_type {
                 arg.coerce_to_type(self, param_class)?
