@@ -427,6 +427,38 @@ impl<'gc> MovieLibraries<'gc> {
     fn iter(&self) -> impl Iterator<Item = &MovieLibrary<'gc>> {
         self.0.iter().map(|(_, val)| val)
     }
+
+    /// Drops libraries whose movie has no strong reference outside of the
+    /// library's own registered characters. A library's characters hold a
+    /// strong `Arc<SwfMovie>` back to their own key (see `Character::self_movie`),
+    /// so a weak key here never expires on its own; this is the only thing
+    /// that actually removes an entry. Unlike checking display-list
+    /// reachability, this can't misidentify a movie kept alive off-stage
+    /// (e.g. a cached `LoaderInfo`) as dead, since that holds its own
+    /// strong `Arc<SwfMovie>` and is counted here. Returns how many were
+    /// evicted.
+    fn evict_unreferenced(&mut self) -> usize {
+        let mut evicted = 0;
+        let movies: Vec<Arc<SwfMovie>> = self.0.keys().collect();
+        for movie in movies {
+            let Some(library) = self.0.get(&movie) else {
+                continue;
+            };
+
+            let self_refs = library
+                .characters
+                .values()
+                .filter(|c| matches!(c.self_movie(), Some(m) if Arc::ptr_eq(&m, &movie)))
+                .count();
+
+            // +1 for the transient clone `movie` itself is holding.
+            if Arc::strong_count(&movie) <= self_refs + 1 {
+                self.0.remove(&movie);
+                evicted += 1;
+            }
+        }
+        evicted
+    }
 }
 
 /// Symbol library for multiple movies.
@@ -502,6 +534,12 @@ impl<'gc> Library<'gc> {
         }
 
         (libraries, characters, with_domain)
+    }
+
+    /// Drops libraries with no strong reference outside their own
+    /// registered characters. See `MovieLibraries::evict_unreferenced`.
+    pub fn evict_unreferenced_movies(&mut self) -> usize {
+        self.movie_libraries.evict_unreferenced()
     }
 
     pub fn orphan_stats(&self, live: &FnvHashSet<usize>) -> (usize, usize) {

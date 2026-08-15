@@ -1,11 +1,14 @@
 use std::cell::OnceCell;
+use std::sync::Arc;
 
 use crate::backend::audio::SoundHandle;
 use crate::binary_data::BinaryData;
 use crate::display_object::{
-    Avm1Button, Avm2Button, BitmapClass, EditText, Graphic, MorphShape, MovieClip, Text, Video,
+    Avm1Button, Avm2Button, BitmapClass, EditText, Graphic, MorphShape, MovieClip, TDisplayObject,
+    Text, Video,
 };
 use crate::font::Font;
+use crate::tag_utils::SwfMovie;
 use gc_arena::barrier::unlock;
 use gc_arena::lock::Lock;
 use gc_arena::{Collect, Gc, Mutation};
@@ -29,6 +32,30 @@ pub enum Character<'gc> {
     Sound(#[collect(require_static)] SoundHandle),
     Video(Video<'gc>),
     BinaryData(Gc<'gc, BinaryData>),
+}
+
+impl<'gc> Character<'gc> {
+    /// The `Arc<SwfMovie>` this character holds a strong reference to, if
+    /// any. Used to tell apart a library's own self-referential holds
+    /// (via its registered characters) from strong references held by
+    /// something outside the library, e.g. a `LoaderInfo` cached by AVM2
+    /// script code with no display list presence.
+    pub fn self_movie(&self) -> Option<Arc<SwfMovie>> {
+        match *self {
+            Character::MovieClip(mc) => Some(mc.movie()),
+            Character::Graphic(g) => Some(g.movie()),
+            Character::MorphShape(m) => Some(m.movie()),
+            Character::Text(t) => Some(t.movie()),
+            Character::EditText(e) => Some(e.movie()),
+            Character::Avm1Button(b) => Some(b.movie()),
+            Character::Avm2Button(b) => Some(b.movie()),
+            Character::Video(v) => Some(v.movie()),
+            Character::Bitmap(_)
+            | Character::Font(_)
+            | Character::Sound(_)
+            | Character::BinaryData(_) => None,
+        }
+    }
 }
 
 #[derive(Collect, Debug)]
