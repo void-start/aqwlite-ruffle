@@ -9,6 +9,7 @@ use crate::display_object::TDisplayObject;
 use crate::string::AvmString;
 use fnv::FnvHashMap;
 use gc_arena::Collect;
+use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
@@ -383,7 +384,7 @@ fn dispatch_event_to_target<'gc>(
     let name = evtmut.event_type();
     let use_capture = evtmut.phase() == EventPhase::Capturing;
 
-    let handlers: Vec<FunctionObject<'gc>> = dispatch_list
+    let handlers: SmallVec<[FunctionObject<'gc>; 2]> = dispatch_list
         .as_dispatch_mut(activation.gc())
         .expect("Internal dispatch list is missing during dispatch!")
         .iter_event_handlers(name, use_capture)
