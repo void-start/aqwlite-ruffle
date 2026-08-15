@@ -517,7 +517,6 @@ pub fn chunk_blends<'a>(
     dynamic_transforms: &'a DynamicTransforms,
     draw_encoder: &mut wgpu::CommandEncoder,
     meshes: &'a Vec<Mesh>,
-    quality: StageQuality,
     width: u32,
     height: u32,
     nearest_layer: LayerRef,
@@ -529,7 +528,6 @@ pub fn chunk_blends<'a>(
         dynamic_transforms,
         draw_encoder,
         meshes,
-        quality,
         width,
         height,
         nearest_layer,
@@ -540,7 +538,6 @@ pub fn chunk_blends<'a>(
 
 struct WgpuCommandHandler<'a> {
     descriptors: &'a Descriptors,
-    quality: StageQuality,
     width: u32,
     height: u32,
     nearest_layer: LayerRef<'a>,
@@ -566,7 +563,6 @@ impl<'a> WgpuCommandHandler<'a> {
         dynamic_transforms: &'a DynamicTransforms,
         draw_encoder: &'a mut wgpu::CommandEncoder,
         meshes: &'a Vec<Mesh>,
-        quality: StageQuality,
         width: u32,
         height: u32,
         nearest_layer: LayerRef<'a>,
@@ -581,7 +577,6 @@ impl<'a> WgpuCommandHandler<'a> {
 
         Self {
             descriptors,
-            quality,
             width,
             height,
             nearest_layer,
@@ -758,8 +753,8 @@ impl CommandHandler for WgpuCommandHandler<'_> {
         // the parent target by a single quad draw immediately after (see
         // Complex/Shader handling in Surface::draw_commands); MSAA here only
         // smooths its own internal edges before that composite, it does not
-        // affect the final on-screen antialiasing (the parent target keeps
-        // self.quality).
+        // affect the final on-screen antialiasing (the parent Surface keeps
+        // its own quality).
         let surface = Surface::new(
             self.descriptors,
             StageQuality::Low,

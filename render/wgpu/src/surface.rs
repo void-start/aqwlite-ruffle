@@ -135,7 +135,6 @@ impl Surface {
             dynamic_transforms,
             draw_encoder,
             meshes,
-            self.quality,
             target.width(),
             target.height(),
             match nearest_layer {
