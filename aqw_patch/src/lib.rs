@@ -53,6 +53,13 @@ pub fn patch(url: &str, version: u8, data: &mut Vec<u8>) {
         }
         Err(e) => tracing::warn!(target: "aqw_patch", "PlayerDomainCache patch skipped: {e}"),
     }
+    match patches::handle_socket_data::apply(&mut abc) {
+        Ok(true) => applied += 1,
+        Ok(false) => {
+            tracing::warn!(target: "aqw_patch", "SmartFoxClient class not found, skipping")
+        }
+        Err(e) => tracing::warn!(target: "aqw_patch", "handleSocketData patch skipped: {e}"),
+    }
 
     if applied == 0 {
         return;
