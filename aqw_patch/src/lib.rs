@@ -14,6 +14,7 @@ const GAME_SWF_NAME: &str = "Game3098r24.swf";
 /// Entry point matching `ruffle_common::tag_utils::set_swf_patch_hook`'s
 /// expected signature.
 pub fn patch(url: &str, version: u8, data: &mut Vec<u8>) {
+    tracing::warn!(target: "aqw_patch", "hook saw url={url:?} version={version} len={}", data.len());
     if !is_game_swf(url) {
         return;
     }
