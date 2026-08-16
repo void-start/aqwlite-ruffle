@@ -1,4 +1,4 @@
-use swf::avm2::types::{AbcFile, Index, MethodBody, Multiname, Op, TraitKind};
+use swf::avm2::types::{AbcFile, Exception, Index, MethodBody, Multiname, Op, TraitKind};
 use swf::extensions::ReadSwfExt;
 
 /// Pre-compiled replacement for `SmartFoxClient.handleSocketData`, built from
@@ -36,6 +36,10 @@ pub fn apply(abc: &mut AbcFile) -> Result<bool, String> {
         .iter()
         .find(|b| b.method.as_u30() as usize == snippet_method_idx)
         .ok_or("snippet ABC is missing handleSocketData's method body")?;
+    let snippet_exc = snippet_body
+        .exceptions
+        .first()
+        .ok_or("snippet's handleSocketData has no exception handler")?;
 
     let target_body_idx = abc
         .method_bodies
@@ -52,13 +56,53 @@ pub fn apply(abc: &mut AbcFile) -> Result<bool, String> {
 
     let table = OverrideTable::build(abc)?;
 
-    let mut ops = disassemble(&snippet_body.code)
-        .map_err(|e| format!("failed to disassemble snippet method body: {e}"))?;
+    // Disassemble, remap operand indices, then resolve every branch target
+    // and the exception range to *op indices* (not raw byte offsets) before
+    // anything is re-encoded. Byte offsets aren't stable across this: some
+    // remapped multiname indices (e.g. 22 -> 8930) need more bytes to encode
+    // as a u30 than the snippet's own small indices did, which shifts every
+    // absolute/relative offset after that point if left untranslated.
+    let (positions, mut ops) = disassemble(&snippet_body.code)?;
+    let old_total_len = snippet_body.code.len();
+    let branch_targets = resolve_branch_targets(&ops, &positions, old_total_len)?;
+
+    let from_idx = find_op_index(&positions, old_total_len, snippet_exc.from_offset as usize);
+    let to_idx = find_op_index(&positions, old_total_len, snippet_exc.to_offset as usize);
+    let target_idx = find_op_index(&positions, old_total_len, snippet_exc.target_offset as usize);
+    if from_idx == usize::MAX || to_idx == usize::MAX || target_idx == usize::MAX {
+        return Err("exception range doesn't land on instruction boundaries".to_string());
+    }
+
     for op in &mut ops {
         table.remap_op(op)?;
     }
-    let new_code =
-        reassemble(&ops).map_err(|e| format!("failed to reassemble patched bytecode: {e}"))?;
+
+    // Pass 1: encode every op once (branch offsets zeroed - fixed S24
+    // encoding means the offset's value never affects instruction size) to
+    // learn each instruction's real new byte position.
+    let mut new_positions = Vec::with_capacity(ops.len());
+    let mut cursor = 0usize;
+    for op in &ops {
+        new_positions.push(cursor);
+        let mut sized = op.clone();
+        if branch_offset(&sized).is_some() {
+            set_branch_offset(&mut sized, 0);
+        }
+        cursor += encode_one(&sized)?.len();
+    }
+    let new_total_len = cursor;
+
+    // Pass 2: now that new positions are known, fix up every branch offset
+    // and the exception range to match.
+    for (i, target) in branch_targets.iter().enumerate() {
+        if let Some(target) = target {
+            let after = op_end_position(&new_positions, new_total_len, i);
+            let target_pos = op_position(&new_positions, new_total_len, *target);
+            set_branch_offset(&mut ops[i], target_pos as i32 - after as i32);
+        }
+    }
+
+    let new_code = reassemble(&ops)?;
 
     let new_body = MethodBody {
         method: Index::new(target_method_idx as u32),
@@ -67,10 +111,10 @@ pub fn apply(abc: &mut AbcFile) -> Result<bool, String> {
         init_scope_depth: snippet_body.init_scope_depth,
         max_scope_depth: snippet_body.max_scope_depth,
         code: new_code,
-        exceptions: vec![swf::avm2::types::Exception {
-            from_offset: snippet_body.exceptions[0].from_offset,
-            to_offset: snippet_body.exceptions[0].to_offset,
-            target_offset: snippet_body.exceptions[0].target_offset,
+        exceptions: vec![Exception {
+            from_offset: op_position(&new_positions, new_total_len, from_idx) as u32,
+            to_offset: op_position(&new_positions, new_total_len, to_idx) as u32,
+            target_offset: op_position(&new_positions, new_total_len, target_idx) as u32,
             variable_name: exc_var,
             type_name: exc_type,
         }],
@@ -79,6 +123,104 @@ pub fn apply(abc: &mut AbcFile) -> Result<bool, String> {
     abc.method_bodies[target_body_idx] = new_body;
 
     Ok(true)
+}
+
+/// The byte position immediately after op `i` - where a branch instruction's
+/// offset is measured from. `positions.len()` (i.e. `total_len`) if `i` is
+/// the last op.
+fn op_end_position(positions: &[usize], total_len: usize, i: usize) -> usize {
+    positions.get(i + 1).copied().unwrap_or(total_len)
+}
+
+/// The byte position of op index `i`, or `total_len` for the sentinel index
+/// `positions.len()` (used when an offset points exactly at the end of the
+/// method body, e.g. a try-block that runs to the last instruction).
+fn op_position(positions: &[usize], total_len: usize, i: usize) -> usize {
+    positions.get(i).copied().unwrap_or(total_len)
+}
+
+/// Resolves an absolute byte offset to an op index. Returns `positions.len()`
+/// (a valid sentinel, see `op_position`/`op_end_position`) if `target` is
+/// exactly the end of the method body, or `usize::MAX` if it doesn't land on
+/// any instruction boundary at all.
+fn find_op_index(positions: &[usize], total_len: usize, target: usize) -> usize {
+    if let Some(i) = positions.iter().position(|&p| p == target) {
+        return i;
+    }
+    if target == total_len {
+        return positions.len();
+    }
+    usize::MAX
+}
+
+fn resolve_branch_targets(
+    ops: &[Op],
+    positions: &[usize],
+    total_len: usize,
+) -> Result<Vec<Option<usize>>, String> {
+    ops.iter()
+        .enumerate()
+        .map(|(i, op)| {
+            let Some(offset) = branch_offset(op) else {
+                return Ok(None);
+            };
+            let after = op_end_position(positions, total_len, i);
+            let target_pos = after as i64 + offset as i64;
+            if target_pos < 0 {
+                return Err(format!("op {i} branches to a negative position"));
+            }
+            let target_pos = target_pos as usize;
+            let idx = find_op_index(positions, total_len, target_pos);
+            if idx == usize::MAX {
+                return Err(format!(
+                    "op {i} branches to byte {target_pos}, which isn't an instruction boundary"
+                ));
+            }
+            Ok(Some(idx))
+        })
+        .collect()
+}
+
+fn branch_offset(op: &Op) -> Option<i32> {
+    match *op {
+        Op::IfEq { offset }
+        | Op::IfFalse { offset }
+        | Op::IfGe { offset }
+        | Op::IfGt { offset }
+        | Op::IfLe { offset }
+        | Op::IfLt { offset }
+        | Op::IfNe { offset }
+        | Op::IfNge { offset }
+        | Op::IfNgt { offset }
+        | Op::IfNle { offset }
+        | Op::IfNlt { offset }
+        | Op::IfStrictEq { offset }
+        | Op::IfStrictNe { offset }
+        | Op::IfTrue { offset }
+        | Op::Jump { offset } => Some(offset),
+        _ => None,
+    }
+}
+
+fn set_branch_offset(op: &mut Op, new_offset: i32) {
+    match op {
+        Op::IfEq { offset }
+        | Op::IfFalse { offset }
+        | Op::IfGe { offset }
+        | Op::IfGt { offset }
+        | Op::IfLe { offset }
+        | Op::IfLt { offset }
+        | Op::IfNe { offset }
+        | Op::IfNge { offset }
+        | Op::IfNgt { offset }
+        | Op::IfNle { offset }
+        | Op::IfNlt { offset }
+        | Op::IfStrictEq { offset }
+        | Op::IfStrictNe { offset }
+        | Op::IfTrue { offset }
+        | Op::Jump { offset } => *offset = new_offset,
+        _ => unreachable!("set_branch_offset called on a non-branch op"),
+    }
 }
 
 fn find_method_index(abc: &AbcFile, class_name: &str, method_name: &str) -> Option<usize> {
@@ -134,9 +276,6 @@ struct OverrideTable {
 
 impl OverrideTable {
     fn build(target: &mut AbcFile) -> Result<Self, String> {
-        // (symbol name, snippet multiname index) pairs, read off the
-        // snippet's own constant pool by name so this doesn't depend on
-        // exact index numbers surviving a recompile.
         let snippet = swf::avm2::read::Reader::new(SNIPPET_ABC)
             .read()
             .map_err(|e| format!("failed to parse embedded snippet ABC: {e}"))?;
@@ -328,28 +467,36 @@ fn class_namespace_set(target: &AbcFile) -> Result<u32, String> {
         .ok_or("target ABC has no \"socketConnection\" multiname to derive the class namespace set from".to_string())
 }
 
-fn disassemble(code: &[u8]) -> Result<Vec<Op>, String> {
+fn disassemble(code: &[u8]) -> Result<(Vec<usize>, Vec<Op>), String> {
     let mut reader = swf::avm2::read::Reader::new(code);
+    let mut positions = Vec::new();
     let mut ops = Vec::new();
     loop {
         if reader.as_slice().is_empty() {
             break;
         }
+        let pos = code.len() - reader.as_slice().len();
         let op = reader
             .read_op()
-            .map_err(|e| format!("bad opcode at byte {}: {e}", code.len() - reader.as_slice().len()))?;
+            .map_err(|e| format!("bad opcode at byte {pos}: {e}"))?;
+        positions.push(pos);
         ops.push(op);
     }
-    Ok(ops)
+    Ok((positions, ops))
+}
+
+fn encode_one(op: &Op) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    swf::avm2::write::Writer::new(&mut out)
+        .write_op(op)
+        .map_err(|e| format!("failed to write op {op:?}: {e}"))?;
+    Ok(out)
 }
 
 fn reassemble(ops: &[Op]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    let mut writer = swf::avm2::write::Writer::new(&mut out);
     for op in ops {
-        writer
-            .write_op(op)
-            .map_err(|e| format!("failed to write op {op:?}: {e}"))?;
+        out.extend_from_slice(&encode_one(op)?);
     }
     Ok(out)
 }
