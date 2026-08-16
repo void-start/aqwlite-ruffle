@@ -1,4 +1,4 @@
-use swf::avm2::types::{AbcFile, Exception, Index, MethodBody, Multiname, Op, TraitKind};
+use swf::avm2::types::{AbcFile, Exception, Index, MethodBody, Multiname, Op, Trait, TraitKind};
 use swf::extensions::ReadSwfExt;
 
 /// Pre-compiled replacement for `SmartFoxClient.handleSocketData`, built from
@@ -54,7 +54,8 @@ pub fn apply(abc: &mut AbcFile) -> Result<bool, String> {
         (exc.type_name, exc.variable_name)
     };
 
-    let table = OverrideTable::build(abc)?;
+    let class_namespace_set = class_namespace_set(abc)?;
+    let mut table = OverrideTable::build(abc, class_namespace_set)?;
 
     // Disassemble, remap operand indices, then resolve every branch target
     // and the exception range to *op indices* (not raw byte offsets) before
@@ -104,6 +105,18 @@ pub fn apply(abc: &mut AbcFile) -> Result<bool, String> {
 
     let new_code = reassemble(&ops)?;
 
+    // The method body's own traits declare the activation object's local
+    // variable slots (`chunk`, `avail`, ... and their types). These aren't
+    // touched by disassembling `code` at all, but they reference the same
+    // snippet-local multiname indices and need the same translation - this
+    // was missed on the first pass and silently produced a body whose
+    // locals were typed against whatever unrelated multiname happened to
+    // sit at that index in the target's (much larger) pool, surfacing as a
+    // `TypeError: Type Coercion failed` the first time real socket data
+    // exercised the method.
+    let new_traits =
+        table.remap_traits(abc, class_namespace_set, &snippet, &snippet_body.traits)?;
+
     let new_body = MethodBody {
         method: Index::new(target_method_idx as u32),
         max_stack: snippet_body.max_stack,
@@ -118,7 +131,7 @@ pub fn apply(abc: &mut AbcFile) -> Result<bool, String> {
             variable_name: exc_var,
             type_name: exc_type,
         }],
-        traits: snippet_body.traits.clone(),
+        traits: new_traits,
     };
     abc.method_bodies[target_body_idx] = new_body;
 
@@ -262,11 +275,12 @@ fn find_string(strings: &[Vec<u8>], target: &str) -> Option<u32> {
 }
 
 /// Maps every multiname/string the snippet's `handleSocketData` body
-/// references to an equivalent entry in the target ABC, either an existing
-/// one (found by name) or a freshly appended one. Built once per patch
-/// application by resolving each symbol used, rather than hardcoding
-/// snippet-side constant-pool index numbers, so a recompile of the snippet
-/// that renumbers its own pool doesn't silently break this.
+/// references - in its bytecode *and* in its method-body traits (the
+/// activation object's local-variable slot declarations) - to an equivalent
+/// entry in the target ABC, either an existing one (found by name) or a
+/// freshly appended one. Built by resolving each symbol by name rather than
+/// hardcoding snippet-side constant-pool index numbers, so a recompile of
+/// the snippet that renumbers its own pool doesn't silently break this.
 struct OverrideTable {
     /// snippet multiname index -> target multiname index
     multinames: std::collections::HashMap<u32, u32>,
@@ -275,17 +289,19 @@ struct OverrideTable {
 }
 
 impl OverrideTable {
-    fn build(target: &mut AbcFile) -> Result<Self, String> {
+    fn build(target: &mut AbcFile, class_namespace_set: u32) -> Result<Self, String> {
         let snippet = swf::avm2::read::Reader::new(SNIPPET_ABC)
             .read()
             .map_err(|e| format!("failed to parse embedded snippet ABC: {e}"))?;
 
-        let class_namespace_set = class_namespace_set(target)?;
         let mut multinames = std::collections::HashMap::new();
         let mut strings = std::collections::HashMap::new();
 
         for symbol in [
             "ByteArray",
+            "Event",
+            "String",
+            "int",
             "socketConnection",
             "bytesAvailable",
             "readBytes",
@@ -297,7 +313,6 @@ impl OverrideTable {
             "handleMessage",
             "message",
             "debugMessage",
-            "int",
         ] {
             let Some(snippet_str_idx) = find_string(&snippet.constant_pool.strings, symbol)
             else {
@@ -386,6 +401,99 @@ impl OverrideTable {
             *value = Index::new(new_idx);
         }
         Ok(())
+    }
+
+    /// Translates the method body's own traits (the activation object's
+    /// local-variable slot declarations). Slot *names* are arbitrary labels
+    /// specific to this snippet (`chunk`, `avail`, ...) with no equivalent
+    /// in the target, so those are appended fresh on demand rather than
+    /// looked up in the curated symbol list above; slot *types* (`ByteArray`,
+    /// `int`, ...) go through the same curated entries the bytecode uses.
+    fn remap_traits(
+        &mut self,
+        target: &mut AbcFile,
+        class_namespace_set: u32,
+        snippet: &AbcFile,
+        traits: &[Trait],
+    ) -> Result<Vec<Trait>, String> {
+        traits
+            .iter()
+            .map(|t| {
+                let name =
+                    self.resolve_or_append(target, class_namespace_set, snippet, t.name.as_u30())?;
+                let kind = match t.kind {
+                    TraitKind::Slot {
+                        slot_id,
+                        type_name,
+                        value,
+                    } => TraitKind::Slot {
+                        slot_id,
+                        type_name: Index::new(self.resolve_or_append(
+                            target,
+                            class_namespace_set,
+                            snippet,
+                            type_name.as_u30(),
+                        )?),
+                        value,
+                    },
+                    TraitKind::Const {
+                        slot_id,
+                        type_name,
+                        value,
+                    } => TraitKind::Const {
+                        slot_id,
+                        type_name: Index::new(self.resolve_or_append(
+                            target,
+                            class_namespace_set,
+                            snippet,
+                            type_name.as_u30(),
+                        )?),
+                        value,
+                    },
+                    ref other => {
+                        return Err(format!("unexpected trait kind in method body: {other:?}"));
+                    }
+                };
+                Ok(Trait {
+                    name: Index::new(name),
+                    kind,
+                    metadata: t.metadata.clone(),
+                    is_final: t.is_final,
+                    is_override: t.is_override,
+                })
+            })
+            .collect()
+    }
+
+    fn resolve_or_append(
+        &mut self,
+        target: &mut AbcFile,
+        class_namespace_set: u32,
+        snippet: &AbcFile,
+        snippet_idx: u32,
+    ) -> Result<u32, String> {
+        if snippet_idx == 0 {
+            return Ok(0); // the "any type" wildcard, valid as-is
+        }
+        if let Some(&idx) = self.multinames.get(&snippet_idx) {
+            return Ok(idx);
+        }
+        let m = snippet
+            .constant_pool
+            .multinames
+            .get(snippet_idx as usize - 1)
+            .ok_or_else(|| format!("snippet multiname {snippet_idx} out of range"))?;
+        let name_idx = multiname_name_idx(m)
+            .ok_or_else(|| format!("snippet multiname {snippet_idx} has no name to resolve"))?;
+        let symbol = snippet
+            .constant_pool
+            .strings
+            .get(name_idx as usize - 1)
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .ok_or_else(|| format!("snippet multiname {snippet_idx} has a dangling string"))?;
+        let target_idx = find_or_append_target_multiname(target, &symbol, class_namespace_set)?;
+        self.multinames.insert(snippet_idx, target_idx);
+        Ok(target_idx)
     }
 }
 
