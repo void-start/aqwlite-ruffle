@@ -185,6 +185,8 @@ fn main() -> Result<(), Error> {
 
     subscriber.init();
 
+    ruffle_core::tag_utils::set_swf_patch_hook(aqw_patch::patch);
+
     let result = App::new(preferences).and_then(|(mut app, event_loop)| {
         event_loop.run_app(&mut app).context("Event loop failure")
     });

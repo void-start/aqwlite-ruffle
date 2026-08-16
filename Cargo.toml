@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "aqw_patch",
     "core",
     "core/macros",
     "core/build_playerglobal",

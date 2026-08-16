@@ -20,6 +20,7 @@ image = { workspace = true, features = ["png"] }
 egui-winit = "0.33.3"
 fontdb = "0.23"
 ruffle_core = { path = "../core", features = ["audio", "clap", "mp3", "aac", "nellymoser", "default_compatibility_rules", "egui"] }
+aqw_patch = { path = "../aqw_patch" }
 ruffle_render = { path = "../render", features = ["clap"] }
 ruffle_render_wgpu = { path = "../render/wgpu", features = ["clap"] }
 ruffle_video_software = { path = "../video/software", optional = true }
