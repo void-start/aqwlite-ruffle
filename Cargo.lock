@@ -187,6 +187,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aqw_patch"
+version = "0.4.0"
+dependencies = [
+ "swf 0.2.2",
+ "tracing",
+]
+
+[[package]]
 name = "arboard"
 version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4747,6 +4755,7 @@ name = "ruffle_desktop"
 version = "0.4.0"
 dependencies = [
  "anyhow",
+ "aqw_patch",
  "ashpd",
  "async-channel",
  "async-task",
