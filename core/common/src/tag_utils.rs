@@ -2,9 +2,22 @@ use crate::sandbox::SandboxType;
 
 use gc_arena::Collect;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use swf::{Fixed8, HeaderExt, Rectangle, Twips};
 use url::Url;
+
+/// A hook invoked on every decompressed SWF tag stream, keyed by the movie's
+/// URL, before it is parsed. Used by the AQWLite fork to apply bytecode
+/// patches external to this engine; see the `aqw_patch` crate. Unset by
+/// default, in which case this is a no-op.
+type SwfPatchHook = fn(url: &str, version: u8, data: &mut Vec<u8>);
+
+static SWF_PATCH_HOOK: OnceLock<SwfPatchHook> = OnceLock::new();
+
+/// Registers the SWF patch hook. Only the first call takes effect.
+pub fn set_swf_patch_hook(hook: SwfPatchHook) {
+    let _ = SWF_PATCH_HOOK.set(hook);
+}
 
 pub type SwfStream<'a> = swf::read::Reader<'a>;
 
@@ -171,7 +184,10 @@ impl SwfMovie {
         load_bytes_info: Option<LoadBytesInfo>,
     ) -> Result<Self, swf::error::Error> {
         let compressed_len = swf_data.len();
-        let swf_buf = swf::read::decompress_swf(swf_data)?;
+        let mut swf_buf = swf::read::decompress_swf(swf_data)?;
+        if let Some(hook) = SWF_PATCH_HOOK.get() {
+            hook(&url, swf_buf.header.version(), &mut swf_buf.data);
+        }
         let encoding = swf::SwfStr::encoding_for_version(swf_buf.header.version());
 
         // The loader SWF has full control over the tags of a SWF loaded using
