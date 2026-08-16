@@ -416,11 +416,11 @@ impl OverrideTable {
         snippet: &AbcFile,
         traits: &[Trait],
     ) -> Result<Vec<Trait>, String> {
+        let qname_namespace = top_level_namespace(target)?;
         traits
             .iter()
             .map(|t| {
-                let name =
-                    self.resolve_or_append(target, class_namespace_set, snippet, t.name.as_u30())?;
+                let name = self.resolve_trait_name(target, qname_namespace, snippet, t.name.as_u30())?;
                 let kind = match t.kind {
                     TraitKind::Slot {
                         slot_id,
@@ -495,6 +495,43 @@ impl OverrideTable {
         self.multinames.insert(snippet_idx, target_idx);
         Ok(target_idx)
     }
+
+    /// Trait *names* (as opposed to their types) are fixed, compile-time
+    /// bindings - the verifier expects a `QName`, not the open
+    /// `Multiname`-with-namespace-set kind `find_or_append_target_multiname`
+    /// produces for property/method access. These labels (`chunk`, `avail`,
+    /// ...) are also snippet-local with no equivalent in the target, so this
+    /// always appends fresh rather than trying to match an existing one.
+    fn resolve_trait_name(
+        &mut self,
+        target: &mut AbcFile,
+        qname_namespace: u32,
+        snippet: &AbcFile,
+        snippet_idx: u32,
+    ) -> Result<u32, String> {
+        if snippet_idx == 0 {
+            return Ok(0);
+        }
+        if let Some(&idx) = self.multinames.get(&snippet_idx) {
+            return Ok(idx);
+        }
+        let m = snippet
+            .constant_pool
+            .multinames
+            .get(snippet_idx as usize - 1)
+            .ok_or_else(|| format!("snippet multiname {snippet_idx} out of range"))?;
+        let name_idx = multiname_name_idx(m)
+            .ok_or_else(|| format!("snippet multiname {snippet_idx} has no name to resolve"))?;
+        let symbol = snippet
+            .constant_pool
+            .strings
+            .get(name_idx as usize - 1)
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .ok_or_else(|| format!("snippet multiname {snippet_idx} has a dangling string"))?;
+        let target_idx = find_or_append_target_qname(target, &symbol, qname_namespace)?;
+        self.multinames.insert(snippet_idx, target_idx);
+        Ok(target_idx)
+    }
 }
 
 fn multiname_name_idx(m: &Multiname) -> Option<u32> {
@@ -553,6 +590,53 @@ fn find_or_append_target_multiname(
         name: Index::new(str_idx),
     });
     Ok(target.constant_pool.multinames.len() as u32)
+}
+
+/// Same as `find_or_append_target_multiname`, but always produces (or
+/// reuses) a `QName` under a single fixed namespace instead of an open
+/// `Multiname`-with-namespace-set. Used for trait names, which the AVM2
+/// verifier expects to be fixed bindings.
+fn find_or_append_target_qname(
+    target: &mut AbcFile,
+    symbol: &str,
+    namespace: u32,
+) -> Result<u32, String> {
+    let str_idx = if let Some(idx) = find_string(&target.constant_pool.strings, symbol) {
+        idx
+    } else {
+        target.constant_pool.strings.push(symbol.as_bytes().to_vec());
+        target.constant_pool.strings.len() as u32
+    };
+    if let Some(idx) = target.constant_pool.multinames.iter().position(|m| {
+        matches!(m, Multiname::QName { namespace: ns, name }
+            if ns.as_u30() == namespace && name.as_u30() == str_idx)
+    }) {
+        return Ok(idx as u32 + 1);
+    }
+    target.constant_pool.multinames.push(Multiname::QName {
+        namespace: Index::new(namespace),
+        name: Index::new(str_idx),
+    });
+    Ok(target.constant_pool.multinames.len() as u32)
+}
+
+/// The namespace ordinary top-level QNames (like `int`'s own) live under in
+/// the target pool - reused here for freshly-appended trait-name QNames so
+/// they're indistinguishable from ones a real compile would have produced.
+fn top_level_namespace(target: &AbcFile) -> Result<u32, String> {
+    let str_idx = find_string(&target.constant_pool.strings, "int")
+        .ok_or("target ABC has no \"int\" string")?;
+    target
+        .constant_pool
+        .multinames
+        .iter()
+        .find_map(|m| match m {
+            Multiname::QName { namespace, name } if name.as_u30() == str_idx => {
+                Some(namespace.as_u30())
+            }
+            _ => None,
+        })
+        .ok_or("target ABC has no top-level QName for \"int\" to derive a namespace from".to_string())
 }
 
 fn class_namespace_set(target: &AbcFile) -> Result<u32, String> {
